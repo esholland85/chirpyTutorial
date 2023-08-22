@@ -6,13 +6,13 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"os"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
 )
 
 func main() {
-	//r := http.NewServeMux()
 	r := chi.NewRouter()
 	apiR := chi.NewRouter()
 	adminR := chi.NewRouter()
@@ -26,6 +26,11 @@ func main() {
 	directory := http.Dir(".")
 	fsHandler := http.StripPrefix("/app", apiCfg.middlewareMetricsInc(http.FileServer(directory)))
 
+	//for frequent repeated tests, I make sure there IS a database, remove it, and make it again.
+	getChirps("database.json")
+	os.Remove("database.json")
+	getChirps("database.json")
+
 	r.Mount("/api", apiR)
 	r.Mount("/admin", adminR)
 
@@ -34,6 +39,7 @@ func main() {
 	apiR.Get("/healthz", healthz)
 	//apiR.Post("/validate_chirp", validationHandler)
 	apiR.Post("/chirps", validationHandler)
+	apiR.Get("/chirps", dbRequestHandler)
 	adminR.Get("/metrics", func(w http.ResponseWriter, r *http.Request) { hitzHandler(w, r, apiCfg) })
 
 	httpServer.ListenAndServe()
@@ -46,6 +52,15 @@ type responseRecorder struct {
 
 type apiConfig struct {
 	fileserverHits int
+}
+
+type chirpRAM struct {
+	Chirps map[int]chirp `json:"chirps"`
+}
+
+type chirp struct {
+	Body string `json:"body"`
+	ID   int    `json:"id"`
 }
 
 func healthz(w http.ResponseWriter, req *http.Request) {
@@ -108,20 +123,19 @@ func (r *responseRecorder) WriteHeader(status int) {
 }
 
 func validationHandler(w http.ResponseWriter, r *http.Request) {
-	type parameters struct {
-		Body string `json:"body"`
-	}
-
-	decoder := json.NewDecoder(r.Body)
-	params := parameters{}
-	err := decoder.Decode(&params)
-	if err != nil {
-		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+	oldChirps, err1 := getChirps("database.json")
+	if err1 != nil {
+		respondWithError(w, http.StatusInternalServerError, "Server experienced an error")
 		return
 	}
+	chirpCount := len(oldChirps.Chirps)
 
-	type chirpValid struct {
-		Cleaned_body string `json:"cleaned_body"`
+	decoder := json.NewDecoder(r.Body)
+	params := chirp{}
+	err2 := decoder.Decode(&params)
+	if err2 != nil {
+		respondWithError(w, http.StatusInternalServerError, "Couldn't decode parameters")
+		return
 	}
 
 	if len(params.Body) == 0 {
@@ -134,11 +148,26 @@ func validationHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	respBody := chirpValid{
-		Cleaned_body: washYourMouth(params.Body),
+	chirpToSave := chirp{
+		Body: washYourMouth(params.Body),
+		ID:   chirpCount + 1,
+	}
+	saveChirps(chirpToSave, "database.json")
+
+	respondWithJSON(w, 201, chirpToSave)
+}
+
+func dbRequestHandler(w http.ResponseWriter, r *http.Request) {
+	oldChirps, err := getChirps("database.json")
+	if err != nil {
+		respondWithError(w, http.StatusInternalServerError, "Server encountered an error")
+	}
+	payload := []chirp{}
+	for _, currentChirp := range oldChirps.Chirps {
+		payload = append(payload, currentChirp)
 	}
 
-	respondWithJSON(w, 200, respBody)
+	respondWithJSON(w, 200, payload)
 }
 
 func respondWithError(w http.ResponseWriter, code int, msg string) {
@@ -189,4 +218,46 @@ func washYourMouth(body string) string {
 
 	putTogether := strings.Join(broken, " ")
 	return putTogether
+}
+
+func getChirps(path string) (chirpRAM, error) {
+	//get and save should both be locking... something about a mux?
+	//I've done it before, forgotten how to do it now, and need to refresh.
+	contents, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+
+			saveFile, err2 := json.Marshal(chirpRAM{Chirps: map[int]chirp{}})
+			if err2 != nil {
+				return chirpRAM{}, nil
+			}
+			os.WriteFile(path, saveFile, os.ModePerm)
+			return chirpRAM{}, err
+		}
+		fmt.Println(err)
+	}
+
+	chirpsData := chirpRAM{}
+
+	err = json.Unmarshal([]byte(contents), &chirpsData)
+	if err != nil {
+		fmt.Println("Error:", err)
+		return chirpRAM{}, err
+	}
+
+	return chirpsData, nil
+}
+
+func saveChirps(newChirp chirp, path string) {
+	oldChirps, err := getChirps(path)
+	if err != nil {
+		fmt.Println(err)
+	}
+	oldChirps.Chirps[newChirp.ID] = newChirp
+	saveFile, err := json.Marshal(oldChirps)
+	if err != nil {
+		fmt.Println(err)
+	}
+
+	os.WriteFile(path, saveFile, os.ModePerm)
 }
