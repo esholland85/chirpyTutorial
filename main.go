@@ -237,7 +237,7 @@ func (db *DB) UserHandler(w http.ResponseWriter, r *http.Request) {
 
 	type response struct {
 		Email string `json:"email"`
-		ID    int    `json:id`
+		ID    int    `json:"id"`
 	}
 
 	newResponse := response{
@@ -508,9 +508,8 @@ func (db *DB) NewUser(newUser User) error {
 
 func (db *DB) AuthenticateUser(w http.ResponseWriter, r *http.Request, cfg *apiConfig) (User, bool) {
 	type UpdateAccount struct {
-		Password      string `json:"password"`
-		Email         string `json:"email"`
-		Authorization string `json:"authorization"`
+		Password string `json:"password"`
+		Email    string `json:"email"`
 	}
 
 	decoder := json.NewDecoder(r.Body)
@@ -520,8 +519,9 @@ func (db *DB) AuthenticateUser(w http.ResponseWriter, r *http.Request, cfg *apiC
 		respondWithError(w, 500, "Can't decode request")
 		return User{}, false
 	}
-	fmt.Println(params)
-	tokenString := strings.Replace(params.Authorization, "Bearer ", "", 1)
+
+	tokenHeader := r.Header.Get("Authorization")
+	tokenString := strings.Replace(tokenHeader, "Bearer ", "", 1)
 
 	type MyCustomClaims struct {
 		jwt.RegisteredClaims
@@ -536,7 +536,7 @@ func (db *DB) AuthenticateUser(w http.ResponseWriter, r *http.Request, cfg *apiC
 		fmt.Println(err2)
 		errIntro := err2.Error()[:18]
 		if errIntro == "token is malformed" {
-			fmt.Println(tokenString)
+			respondWithError(w, 401, "Unauthorized")
 			return User{}, false
 		}
 		if !token.Valid {
@@ -589,16 +589,15 @@ func (db *DB) UpdateUser(w http.ResponseWriter, r *http.Request, cfg *apiConfig)
 		allUsers[currentUser.ID] = hashedUser
 		db.SaveDB(wholeDB)
 		type response struct {
-			Email    string `json:"email"`
-			Password string `json:"password"`
+			Email string `json:"email"`
+			ID    int    `json:"id"`
 		}
 
 		myResponse := response{
-			Email:    currentUser.Email,
-			Password: currentUser.Password,
+			Email: currentUser.Email,
+			ID:    currentUser.ID,
 		}
 		respondWithJSON(w, 200, myResponse)
 		return
 	}
-	respondWithError(w, 401, "Token failed to resolve")
 }
